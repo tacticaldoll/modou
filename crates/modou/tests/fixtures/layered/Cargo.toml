@@ -1,0 +1,7 @@
+# In-repo fixture: a layered workspace where `core` has an internal path
+# dependency on `adapters`. Used to prove crate-to-crate layering — a violation
+# the external rule (which ignores internal deps) cannot see.
+# `[workspace]` makes this its own workspace root, decoupled from Modou's.
+[workspace]
+resolver = "2"
+members = ["core", "adapters"]

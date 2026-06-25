@@ -1,0 +1,15 @@
+# The amendment reaction (see the amendment-flow decision in PROJECT.md and AGENTS.md).
+#
+# Modou's constitution is the law. Changing the law — or the living specs that
+# project it — is an *amendment* and requires steward review, so an agent cannot
+# silently weaken a boundary to make CI pass. The review requirement is the
+# reaction: a merge cannot relax the law without a human accepting it.
+#
+# This file designates the steward for the protected paths. Designation alone only
+# auto-requests review; to make review *required* (block a merge that relaxes the
+# law), the repository admin must enable branch protection on the default branch
+# with "Require review from Code Owners". Until that setting is on, this file
+# documents intent and requests review but does not block.
+
+/crates/modou/src/constitution.rs   @tacticaldoll
+/openspec/specs/                     @tacticaldoll

@@ -1,0 +1,10 @@
+# In-repo fixture: a clean target with no external dependencies.
+# `[workspace]` makes this its own workspace root, decoupled from Modou's.
+[package]
+name = "example-core"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+
+[workspace]

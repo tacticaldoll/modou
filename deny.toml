@@ -1,0 +1,31 @@
+# cargo-deny supply-chain policy — Modou gates its own dependency surface, the same
+# spirit as `tests/self_governance.rs`. This file is repo tooling (it lives at the
+# workspace root, outside `crates/modou/`, so it is never packaged into the crate).
+#
+# Run: `cargo deny check`. Wired into CI as the `supply-chain` job.
+
+[advisories]
+version = 2
+# Default to denying known-vulnerable and yanked crates (RUSTSEC). No ignores: a real
+# advisory must be fixed or consciously ignored here with a rationale, never silently.
+ignore = []
+
+[licenses]
+version = 2
+# Every license below is present in the actual dependency graph (all permissive):
+#   MIT / Apache-2.0      — modou, serde_json, serde_core, itoa, zmij
+#   Unlicense             — memchr (dual Unlicense OR MIT)
+# Adding a dependency under any other license fails CI until it is reviewed here.
+allow = ["MIT", "Apache-2.0", "Unlicense"]
+confidence-threshold = 0.9
+
+[bans]
+# A new external dependency is already governed by Modou's own reaction
+# (`restrict_dependencies_to(["serde_json"])`); here we only flag accidental
+# duplicate versions so the tiny tree stays tidy.
+multiple-versions = "warn"
+
+[sources]
+# Only crates.io and known git sources; an unknown registry/source fails loud.
+unknown-registry = "deny"
+unknown-git = "deny"

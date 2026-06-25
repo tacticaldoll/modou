@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  dod:
+    name: Definition of Done
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build / test / clippy / fmt
+        run: |
+          cargo build --workspace
+          cargo test --workspace
+          cargo clippy --all-targets -- -D warnings
+          cargo fmt --all --check
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+  msrv:
+    name: MSRV (rust-version)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and test on the declared minimum supported Rust version
+        run: |
+          msrv="$(cargo metadata --no-deps --format-version 1 \
+            | sed -n 's/.*"rust_version":"\([^"]*\)".*/\1/p' | head -n1)"
+          echo "declared rust-version: ${msrv:?could not read rust-version}"
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          cargo "+$msrv" build -p modou
+          cargo "+$msrv" test -p modou
+
+  supply-chain:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: license / advisory / bans / sources policy
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  reaction:
+    name: Modou reaction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: reaction passes on a clean target
+        run: cargo run -p modou -- check --manifest-path crates/modou/tests/fixtures/clean/Cargo.toml
+      - name: reaction fails on a violating target (must not silently pass)
+        run: |
+          if cargo run -p modou -- check --manifest-path crates/modou/tests/fixtures/violating/Cargo.toml; then
+            echo "::error::reaction returned 0 on a known violation — it silently passed"
+            exit 1
+          fi

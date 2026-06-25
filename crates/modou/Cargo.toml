@@ -1,0 +1,48 @@
+[package]
+name = "modou"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.85"
+license.workspace = true
+description = "Rust-native reactive governance: declare crate and module boundaries in Rust and protect them with a CI reaction."
+repository = "https://github.com/tacticaldoll/modou"
+readme = "../../README.md"
+keywords = ["governance", "architecture", "ci", "boundary", "drift"]
+categories = ["development-tools"]
+# The fixture workspaces are nested packages, which Cargo never includes in a
+# published crate; the integration tests that drive them would therefore fail to
+# run from the packaged crate, so exclude them. The self-contained suites ship and
+# pass from the package: the in-crate unit tests and `tests/self_governance.rs`
+# (Modou checking its own manifest and source).
+#
+# EXPECTED, benign: `cargo package`/`cargo publish` prints
+#   warning: ignoring test `cli`/`dogfood` as `tests/…rs` is not included …
+# Cargo emits this for any test target whose source is excluded from the tarball;
+# it only confirms these two targets are dropped from the package — the published
+# artifact is correct. It is not removable by manifest alone without also dropping
+# the tests from the default `cargo test` run (a target excluded from the package
+# warns whether auto-discovered or explicitly declared; a target that does not warn
+# is one Cargo no longer runs in development). Silencing the warning would mean
+# relocating these fixture-bound tests into a separate, unpublished workspace crate
+# plus an external bin-locator dev-dependency for the CLI test — structure this
+# minimalist crate does not warrant for a package-time-only notice.
+exclude = ["tests/cli.rs", "tests/dogfood.rs"]
+
+[dependencies]
+# Reading the governed crate's `cargo metadata` output (JSON). This is reading the
+# *target's* manifest/metadata, not expressing Modou's own constitution in TOML.
+# Modou governs its own dependency surface: serde_json is the only allowed external
+# dependency, enforced by tests/self_governance.rs (Modou checking itself).
+serde_json = "1"
+
+[dev-dependencies]
+# Tests parse the runner's `--format json` output rather than string-matching.
+serde_json = "1"
+
+[lib]
+name = "modou"
+path = "src/lib.rs"
+
+[[bin]]
+name = "modou"
+path = "src/main.rs"

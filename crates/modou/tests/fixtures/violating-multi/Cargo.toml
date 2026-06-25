@@ -1,0 +1,6 @@
+# In-repo fixture: a workspace with two crates that each declare an external
+# (registry) dependency. Used to prove multi-boundary violation aggregation.
+# `[workspace]` makes this its own workspace root, decoupled from Modou's.
+[workspace]
+resolver = "2"
+members = ["core-a", "core-b"]

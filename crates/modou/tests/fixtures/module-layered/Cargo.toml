@@ -1,0 +1,11 @@
+# In-repo fixture: a single crate whose `kernel` module imports its `projection`
+# module — an intra-crate layering violation Cargo's dependency graph cannot see.
+# `[workspace]` makes this its own workspace root, decoupled from Modou's.
+[package]
+name = "app"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+
+[workspace]

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/modou"]
+# Test fixtures are their own workspaces (`[workspace]` in each); exclude them so
+# the Modou workspace does not try to absorb them.
+exclude = [
+    "crates/modou/tests/fixtures/clean",
+    "crates/modou/tests/fixtures/violating",
+    "crates/modou/tests/fixtures/violating-multi",
+    "crates/modou/tests/fixtures/layered",
+    "crates/modou/tests/fixtures/module-layered",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
