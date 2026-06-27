@@ -59,7 +59,7 @@ name = "governance"
 edition = "2021"
 
 [dependencies]
-modou = "0.1"
+modou = "0.3"
 # git:   modou = { git = "https://github.com/tacticaldoll/modou", package = "modou" }
 # local: modou = { path = "../../modou/crates/modou" }
 ```
@@ -123,8 +123,13 @@ The exit code is the reaction:
 - `0` — no boundary violated (or only warn / fully baselined violations)
 - `1` — an enforce-severity violation; the report names the offending crate/module,
   the rule, the finding, and your `because(...)` reason
-- `2` — a constitution or usage error (e.g. a target crate that does not exist, a
-  missing `--manifest-path`) — distinct from drift, never a silent pass
+- `2` — a constitution or scan error (e.g. a target crate that does not exist, or no
+  `Cargo.toml` to evaluate) — distinct from drift, never a silent pass
+
+`--manifest-path` is optional: omit it and `check` resolves the nearest `Cargo.toml`
+(cargo-style). `check` also prints a workspace-coverage line — how many workspace
+crates have no boundary at all; add `--warn-uncovered` to raise each as a
+warn-severity advisory (it never changes the exit code).
 
 ## See the law you declared
 

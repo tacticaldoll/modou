@@ -18,6 +18,19 @@ drifting.
 - **Rust is the constitution** — TOML, Markdown, and reports are projections, not
   the source of truth. The compiler/CI reaction comes first.
 
+## Why reaction, not instruction
+
+Architectural intent — "the core must not depend on adapters" — used to live in
+human understanding and code review. An AI agent writes fluent, locally-plausible
+code without holding that intent, so it erodes the shape it does not understand, and
+*instructing* it ("keep the core clean") cannot bind an agent that has no
+understanding to follow. Modou's answer is not to give the agent understanding: it
+crystallizes the human's intent into a **non-bypassable reaction**, so neither the
+agent nor Modou needs to understand for the law to hold — the understanding is
+front-loaded into the human-authored constitution. Modou is to architectural
+boundaries what `cargo-deny` is to the supply chain: the same govern-by-reaction
+discipline, on the layer Cargo cannot see.
+
 ## How drift is detected
 
 Drift is a **policy-aware diff**, not an AI judgment: **declare** the intended shape
@@ -34,7 +47,7 @@ The human steward keeps a *small* set of must-not-drift boundaries; Modou reacts
 to violations; the agent repairs using the report. A wrong boundary is changed by a
 human-reviewed amendment — never by weakening the constitution to make CI pass.
 
-## v0.1
+## A declared boundary
 
 A Rust-declared boundary plus one CI reaction.
 
@@ -50,11 +63,13 @@ fn constitution() -> Constitution {
 }
 ```
 
-Three crate-dependency rules share one observation source (`cargo metadata`). The
+Four crate-dependency rules share one observation source (`cargo metadata`). The
 external rule takes an optional allowlist; a second forbids a dependency on named
 crates — external or an internal workspace path (crate-to-crate layering); a third
 restricts the crate's dependencies to a *closed* allowlist (internal and external
-alike — "may depend on only these"):
+alike — "may depend on only these"); a fourth restricts only the crate's
+**workspace** dependencies, deriving the members from `cargo metadata` so a newly
+added crate is governed by default:
 
 ```rust
 CrateBoundary::crate_("example-core")
@@ -69,6 +84,31 @@ CrateBoundary::crate_("core")
 CrateBoundary::crate_("domain")
     .restrict_dependencies_to(["serde", "domain-types"])
     .because("the domain may depend on only serde and its own types");
+
+CrateBoundary::crate_("backend")
+    .restrict_workspace_dependencies_to(["core"])
+    .because("a backend may depend on only the core workspace crate");
+```
+
+The two restrict rules differ in **scope**, on purpose: `restrict_dependencies_to`
+governs *all* normal dependencies — external crates (`serde`, `tokio`) included — so
+anything off its allowlist is a violation. `restrict_workspace_dependencies_to`
+governs *only* dependencies on other workspace members and ignores external crates;
+`forbid_all_workspace_dependencies()` is the empty-allowlist shorthand. Because
+workspace membership is observed rather than hand-listed, adding a new workspace
+crate cannot silently slip past the rule.
+
+By default a crate rule observes the normal `[dependencies]` table. Append
+`.dependency_kind(DependencyKind::Dev)` (or `Build`) to point any crate rule at the
+`[dev-dependencies]` or `[build-dependencies]` table instead — so "a backend may not
+pull another backend in as a normal dependency, but a dev-dependency is fine" is
+expressible directly:
+
+```rust
+CrateBoundary::crate_("backend")
+    .forbid_dependency_on(["other-backend"])
+    .dependency_kind(DependencyKind::Dev)
+    .because("a backend may not pull another backend in as a dev-dependency");
 ```
 
 A boundary defaults to *enforce* (a violation fails CI). Mark it `.warn()` to make
@@ -93,14 +133,36 @@ ModuleBoundary::in_crate("app")
     .because("the kernel must not depend on a projection");
 ```
 
+Three module rules share that one `use`-scan observation. `must_not_import` forbids one
+outward import; `restrict_imports_to(["crate::types"])` is the closed-allowlist mirror of
+the crate-level restrict rule (anything off the allowlist is a violation, so a new
+internal module is governed by default); and `must_not_be_imported_by("crate::http")`
+governs the inbound direction — encapsulation, "who may reach in" — naming the offending
+importer. A rule whose target could never react (a `restrict_imports_to` or
+`must_not_be_imported_by` on `crate` itself) is a self-describing constitution error, not
+a silent pass.
+
 ```bash
 cargo run -p modou -- check --manifest-path path/to/Cargo.toml
 ```
 
+`--manifest-path` is optional: omit it and `check` resolves the nearest `Cargo.toml`
+by walking up from the current directory, like `cargo` itself.
+
 Exits `0` (clean / warn-only / fully baselined), `1` (enforced violation), or `2`
-(constitution/scan error). v0.1 proves the reaction against in-repo fixtures
-(`crates/modou/tests/fixtures/`), so the repo is **self-contained**: it references
-no external directory.
+(constitution/scan error — including when no `Cargo.toml` can be found). The reaction
+is proven against in-repo fixtures (`crates/modou/tests/fixtures/`), so the repo is
+**self-contained**: it references no external directory.
+
+`check` also reports **workspace coverage** — how many workspace crates have no
+boundary at all — as an always-on line (and a `coverage` field under `--format
+json`), so a fully-covered clean run reads differently from one where crates are
+simply unchecked. Add `--warn-uncovered` to surface each ungoverned crate as a
+warn-severity advisory; like all advisories, it never changes the exit code:
+
+```bash
+cargo run -p modou -- check --manifest-path path/to/Cargo.toml --warn-uncovered
+```
 
 A dirty project can adopt a boundary without first fixing every violation: record
 the current ones as a baseline, then gate only on *new* ones. The baseline is a
@@ -176,15 +238,20 @@ protecting your constitution.
 
 ## Roadmap
 
-v0.1 detects **crate dependency drift** (via `cargo metadata`) — deny external
-dependencies (with an optional allowlist), forbid a dependency on named crates, and
-restrict dependencies to a closed allowlist — and **module-boundary drift** (the
-intra-crate layering Cargo can't see, observed from `use` declarations). Later
-reaction phases — each with its own observation source, each its own OpenSpec
-change — are deferred in [`BACKLOG.md`](https://github.com/tacticaldoll/modou/blob/main/BACKLOG.md): capability drift and opt-in
+Modou detects **crate dependency drift** (via `cargo metadata`) — deny external
+dependencies (with an optional allowlist), forbid a dependency on named crates,
+restrict dependencies to a closed allowlist, and restrict only the *workspace*
+dependencies (members derived from `cargo metadata`, so new crates are governed by
+default) — and **module-boundary drift** (the intra-crate layering Cargo can't see,
+observed from `use` declarations) — forbid one module from importing another, restrict a
+module's imports to a closed allowlist, or forbid a module from being imported by another.
+Each crate rule can target normal, dev, or build dependencies, and `check` reports
+workspace coverage. Later reaction phases — each
+with its own observation source, each its own OpenSpec change — are deferred in
+[`BACKLOG.md`](https://github.com/tacticaldoll/modou/blob/main/BACKLOG.md): capability drift and opt-in
 runtime drift. Nothing is named or built before its reaction exists.
 
-## Non-goals (v0.1)
+## Non-goals
 
 Not a schema crate, document generator, app framework, agent framework, universal
 graph registry, or runtime policy engine. No TOML/Markdown for the constitution, no

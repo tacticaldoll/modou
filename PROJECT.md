@@ -10,6 +10,13 @@ compiler, CI, and (later) runtime *reactions* to keep architectural shape from
 drifting. The source of truth is Rust code; TOML, Markdown, and reports are
 projections of it.
 
+*Why reaction, not instruction:* architectural intent once lived in human
+understanding and review, but an AI agent writes fluent code without holding it, so
+the intent is crystallized into a non-bypassable reaction rather than entrusted to
+instruction — neither the agent nor Modou needs to understand for the law to hold;
+the understanding is front-loaded into the human-authored constitution. Modou is to
+architectural boundaries what `cargo-deny` is to the supply chain.
+
 ## Core Contract
 
 The behavior protected first: **a declared boundary reacts.** A boundary declared
@@ -64,7 +71,10 @@ break.
   `ModuleBoundary` (a rule on an intra-crate module). Each carries a human reason.
 - **Rule** — what a boundary forbids. Crate rules: `DenyExternalDependencies` (with
   an optional allowlist), `ForbidDependencyOn`, `RestrictDependenciesTo` (a closed
-  allowlist). Module rule: `MustNotImport`.
+  allowlist), `RestrictWorkspaceDependenciesTo` (a closed allowlist over workspace
+  members only). Module rules: `MustNotImport` (forbid one outward import),
+  `RestrictImportsTo` (a closed outward allowlist), `MustNotBeImportedBy` (forbid an
+  inbound importer — who may reach *in*).
 - **Reaction** — the control surface: a compiler / CI / runtime response. *Govern by
   reaction, not instruction.*
 - **Drift** — a divergence between declared and observed shape.
@@ -89,15 +99,56 @@ decisions here.
   is a projection of the report, never the constitution.
 - **Module imports are observed by scanning source `use` declarations**, not by
   parsing a full AST. A hand-rolled scanner keeps Modou dependency-light and
-  macro-free; its partial coverage — bare path expressions and macro-generated
-  imports are out of scope — is acceptable because the drift law only enforces what
-  is observed. Comments and string literals (normal, byte, and raw) are stripped so
-  their text is never mistaken for a `use`.
+  macro-free; its partial coverage — bare path expressions, macro-generated
+  imports, and `#[path = "…"]`-remapped modules are out of scope — is acceptable
+  because the drift law only enforces what is observed. (A `#[path]` attribute moves a
+  `mod name;` to a non-conventional file; the token scanner maps modules by their
+  conventional path, so a remapped module's imports are not observed and the module is
+  not governable — the same stated partial-coverage bound as inline and macro-generated
+  items. Closing it would require reading attributes, an AST-class amendment, not a
+  silent trade.) Comments and string literals (normal, byte, and raw) are stripped so
+  their text is never mistaken for a `use`. A module's identity is derived in three
+  places — its file path, its `mod` declaration, and a `use` path that names it — and
+  these MUST stay in lockstep, since a divergence both fails to govern a real module
+  and silently hides its imports (a false negative, the one thing the core contract
+  forbids). Two consequences fall out and stay token-level, not parser-level, to keep
+  the hand-rolled scanner: a raw identifier is canonicalized (`mod r#type;` compiles to
+  `type.rs`, so `r#type` and `type` are one module), and a `use` is attributed to the
+  inline `mod { … }` that encloses it (so `self`/`super` resolve correctly) — and macro
+  bodies are stripped before scanning for `mod` declarations too, not just `use`s, so
+  the out-of-scope rule for macro-generated items is symmetric. Adopting a real parser
+  (`syn`) would resolve all of this for free but would break the dependency-light
+  self-constitution; that is an amendment, not a silent trade. A boundary's governed
+  *target* is file-based: an inline `mod name { … }` is reachable for import attribution
+  but owns no file, so it cannot be a target — a boundary on one fails loud with a
+  self-describing constitution error (exit 2), distinct from an unknown-module typo,
+  never a silent pass. Governing inline modules as targets is a deliberate non-goal here
+  (it would expand the reaction surface and is only partial while inline modules' own
+  file-backed children are not walked); if ever wanted it is a separate amendment.
+- **The module rule set mirrors the crate level, and a rule that could never react is
+  a constitution error.** Beyond `must_not_import` (forbid one outward edge), a module
+  may `restrict_imports_to` a closed outward allowlist — the govern-by-default shape the
+  crate level already chose, so a newly added module is caught without editing a denylist
+  — and `must_not_be_imported_by` an inbound importer, the complementary direction
+  (encapsulation: who may reach *in*), observed from the same `use` scan. Two principles
+  fall out. First, a rule whose target makes it un-reactive is a self-describing
+  constitution error (exit 2), never a silent no-op: `restrict_imports_to` on `crate`
+  (the root has no outward internal edge) and `must_not_be_imported_by` on `crate` (every
+  internal import is then "the protected module or beneath") could never fire, so they
+  fail loud — the same "no observable reaction → fail, never silently pass" rule as an
+  inline target. Second, a boundary deduplicates its violations **per boundary at the
+  point findings are produced** (a module subtree spans multiple files — and `lib.rs` +
+  `main.rs` both resolve to `crate` — so one forbidden import can be found twice), *not*
+  by a blanket report-wide pass: a report-wide dedup is a suppressor that would silently
+  swallow an unexpected duplicate from any other source, against the fail-loud contract.
 - **The amendment flow is harness convention, not a Modou feature.** Modou cannot
   tell shape drift from policy drift (not an observable fact), and generating PRs or
-  gating merges is orchestration it must not own. Instead the constitution
-  (`crates/modou/src/constitution.rs`) and the living specs (`openspec/specs/`) are
-  assigned to the steward in `.github/CODEOWNERS`; once the repository enables
+  gating merges is orchestration it must not own. Instead Modou's self-governing
+  constitution (`crates/modou/tests/self_governance.rs`), the bundled demo constitution
+  (`crates/modou/src/constitution.rs`), the supply-chain policy (`deny.toml`), and the
+  living specs (`openspec/specs/`) are assigned to the steward in `.github/CODEOWNERS`
+  — the protected path is the boundary whose edit would turn CI green after drift, not
+  only a showcase of it; once the repository enables
   required Code Owner review on the default branch, changing the law requires steward
   approval, so an agent cannot silently weaken a boundary to make CI pass. Until that
   branch-protection setting is on, the designation only auto-requests review.
@@ -107,7 +158,10 @@ decisions here.
   keeps it dependency-light (CI fails the moment a new external dependency creeps
   in), and a `module("crate::engine").must_not_import("crate::runner")` module
   boundary enforces the functional-core / imperative-shell split. A governance tool
-  earns trust by eating its own dog food.
+  earns trust by eating its own dog food. Because this test *is* Modou's real
+  self-law, it is steward-owned in `.github/CODEOWNERS` (alongside `deny.toml`), so an
+  agent cannot relax a self-imposed boundary — e.g. widen the `serde_json`-only
+  allowlist — to turn its own CI green; that is an amendment, not a silent edit.
 - **Projections and the CLI are self-describing; misconfiguration fails loud.** A
   projection must say what it means without a side-channel (e.g. the restrict-to JSON
   key `only`, distinct from deny-external's `allowed`), and an unrecognized flag is a
@@ -118,6 +172,27 @@ decisions here.
   name**, not a local alias; and a crate's **declared** normal dependencies are
   governed as declared, including `[target.'cfg(…)'.dependencies]` and `optional`
   ones (dev/build remain out of scope).
+- **The public API is CLI-first; its frozen shape is chosen, not defaulted.** Modou's
+  primary consumer is the CLI/CI reaction (an exit code and a human-readable report),
+  with `modou::run` / `check` as a secondary library surface. Two deliberate freeze
+  choices follow, recorded so a later change is a conscious one, not a silent regret.
+  First, `Outcome::ConstitutionError` carries a **human-readable `String`**, not a
+  structured error enum: the kinds are modeled internally (single-source message
+  constructors) but collapsed at the boundary, because no consumer yet needs to *match*
+  on the kind — adding speculative structure is the over-foolproofing the minimalism
+  bound rejects (the same reasoning as the deferred report `version` field). If a real
+  consumer ever needs matchable kinds, swapping the payload type is a breaking change,
+  acceptable at a minor bump pre-1.0 and gated by amendment after. Second, the public
+  *value* types (`Constitution`, the boundaries and rules, `Violation`, `Report`,
+  `Outcome`) uniformly derive `Clone, PartialEq, Eq` so a library consumer can compare
+  and store them — adding a derive is non-breaking, so this is a free win, not a freeze
+  risk. Enums that are expected to grow are `#[non_exhaustive]` (`Rule`, `ModuleRule`,
+  `Boundary`, `BoundaryKind`, `Outcome`); `DependencyKind` is deliberately *not* (it
+  mirrors cargo's fixed normal/dev/build set, so users may match it exhaustively).
+  `Severity` is `#[non_exhaustive]` even though it is a two-rung ladder today: keeping
+  it open costs users an exhaustive match but lets a future rung (e.g. an off/info
+  severity) ship without a break, and *removing* `#[non_exhaustive]` later is itself
+  non-breaking — so open is the reversible default.
 
 ## Change Prioritization
 

@@ -1,0 +1,12 @@
+# Regression fixture: the only `use crate::ghost::…` lives inside an uninvoked
+# `macro_rules!` body — a macro-generated import that is out of scope, so a boundary
+# forbidding `crate::ghost` must stay clean. Standalone `[workspace]`.
+[package]
+name = "macrodemo"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"

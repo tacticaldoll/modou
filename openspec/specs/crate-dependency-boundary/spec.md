@@ -17,7 +17,7 @@ declare or run a boundary.
 
 #### Scenario: Boundary declared in Rust
 
-- **WHEN** a developer writes `Constitution::new("example").boundary(Boundary::crate_("example-core").deny_external_dependencies().because("..."))`
+- **WHEN** a developer writes `Constitution::new("example").boundary(CrateBoundary::crate_("example-core").deny_external_dependencies().because("..."))`
 - **THEN** the constitution holds one boundary targeting the crate `example-core` with rule `DenyExternalDependencies` and a non-empty reason
 
 ### Requirement: Target resolution
@@ -41,11 +41,12 @@ mistyped crate name is not reported as architectural drift.
 
 ### Requirement: External dependency classification
 
-The `DenyExternalDependencies` rule SHALL classify the target crate's normal
-`[dependencies]` by source: a dependency resolving to a registry or git source
-is external; a dependency resolving to a workspace path is internal and
-allowed. For v0.1 the rule SHALL consider only normal `[dependencies]`;
-`[dev-dependencies]` and `[build-dependencies]` are out of scope.
+The `DenyExternalDependencies` rule SHALL classify the target crate's dependencies in
+its selected table (normal `[dependencies]` by default) by source: a dependency
+resolving to a registry or git source is external; a dependency resolving to a
+workspace path is internal and allowed. The rule SHALL consider only the boundary's
+selected dependency kind (see Dependency kind selection); tables other than the
+selected one are out of scope.
 
 #### Scenario: External dependency violates the boundary
 
@@ -57,10 +58,10 @@ allowed. For v0.1 the rule SHALL consider only normal `[dependencies]`;
 - **WHEN** the target crate declares only dependencies that resolve to workspace paths
 - **THEN** the system reports no external-dependency violation for that boundary
 
-#### Scenario: Dev and build dependencies are ignored
+#### Scenario: Dev and build dependencies are ignored by default
 
-- **WHEN** the target crate declares a registry dependency only under `[dev-dependencies]` or `[build-dependencies]`
-- **THEN** the system does not emit an external-dependency violation in v0.1
+- **WHEN** the target crate declares a registry dependency only under `[dev-dependencies]` or `[build-dependencies]` and the boundary selects the default normal kind
+- **THEN** the system does not emit an external-dependency violation
 
 ### Requirement: CI reaction
 
@@ -137,7 +138,7 @@ The `DenyExternalDependencies` rule SHALL support an optional allowlist of crate
 
 ### Requirement: Forbid dependency on named crates
 
-A boundary SHALL support a rule that forbids a dependency on specific named crates. A normal `[dependencies]` entry whose name matches a forbidden name SHALL be a violation, whether that dependency resolves to an external source or to an internal workspace path. This enables both deny-specific-crate and crate → crate layering ("core must not depend on adapters"). `[dev-dependencies]` and `[build-dependencies]` SHALL remain out of scope, as in v0.1.
+A boundary SHALL support a rule that forbids a dependency on specific named crates. A dependency in the boundary's selected table (normal `[dependencies]` by default) whose name matches a forbidden name SHALL be a violation, whether that dependency resolves to an external source or to an internal workspace path. This enables both deny-specific-crate and crate → crate layering ("core must not depend on adapters"). Tables other than the selected dependency kind SHALL be out of scope (see Dependency kind selection).
 
 #### Scenario: A forbidden external crate is a violation
 
@@ -175,7 +176,7 @@ A boundary SHALL carry a severity that controls how its violations react: `enfor
 
 ### Requirement: Restrict dependencies to an allowlist
 
-A boundary SHALL support a rule that restricts the target crate's normal `[dependencies]` to a closed allowlist of crate names. Every normal dependency whose name is not in the allowlist SHALL be a violation, whether it resolves to an external source or to an internal workspace path. An empty allowlist SHALL forbid every normal dependency (stricter than the deny-external rule, which still permits internal path dependencies). `[dev-dependencies]` and `[build-dependencies]` SHALL remain out of scope, as for the other crate rules. The rule SHALL carry severity and react through the report, baseline, and projection exactly as the existing crate rules do.
+A boundary SHALL support a rule that restricts the target crate's dependencies in its selected table (normal `[dependencies]` by default) to a closed allowlist of crate names. Every dependency in that table whose name is not in the allowlist SHALL be a violation, whether it resolves to an external source or to an internal workspace path. An empty allowlist SHALL forbid every dependency in that table (stricter than the deny-external rule, which still permits internal path dependencies). Tables other than the selected dependency kind SHALL be out of scope (see Dependency kind selection). The rule SHALL carry severity and react through the report, baseline, and projection exactly as the existing crate rules do.
 
 #### Scenario: A dependency outside the allowlist is a violation
 
@@ -196,4 +197,57 @@ A boundary SHALL support a rule that restricts the target crate's normal `[depen
 
 - **WHEN** the target crate declares any normal dependency and the boundary restricts dependencies to `[]`
 - **THEN** the system emits a violation for that dependency
+
+### Requirement: Restrict workspace dependencies to an allowlist
+
+A boundary SHALL support a rule that restricts the target crate's dependencies on **other workspace members** to a closed allowlist of crate names, where workspace membership is observed from `cargo metadata`. A dependency in the boundary's selected table (normal `[dependencies]` by default) whose resolved package is another workspace member and whose name is not in the allowlist SHALL be a violation; an empty allowlist SHALL forbid every workspace dependency (the `forbid_all_workspace_dependencies()` shorthand). External (registry/git) dependencies SHALL NOT be considered by this rule, distinguishing it from `restrict_dependencies_to`, which governs all dependencies in the selected table. A workspace member added after the boundary is declared SHALL be governed without any change to the constitution. Names SHALL match the package name, not a local alias. The rule SHALL carry severity and react through the report, baseline, and projection exactly as the other crate rules do. Tables other than the selected dependency kind SHALL be out of scope (see Dependency kind selection).
+
+#### Scenario: A workspace dependency outside the allowlist is a violation
+
+- **WHEN** the target crate `backend` declares a normal dependency on the workspace member `other-backend`, and the boundary restricts workspace dependencies to `["core"]`
+- **THEN** the system emits a violation naming `other-backend` and exits 1
+
+#### Scenario: A workspace dependency inside the allowlist is clean
+
+- **WHEN** the target crate's only workspace dependency is on `core`, and the boundary restricts workspace dependencies to `["core"]`
+- **THEN** the system reports no violation for that boundary
+
+#### Scenario: An external dependency is ignored by the workspace rule
+
+- **WHEN** the target crate declares the external dependency `serde` and the boundary restricts workspace dependencies to `["core"]`
+- **THEN** the system reports no violation for `serde`, because the rule considers only workspace members
+
+#### Scenario: An empty allowlist forbids every workspace dependency
+
+- **WHEN** the target crate declares a normal dependency on any other workspace member and the boundary forbids all workspace dependencies (an empty allowlist)
+- **THEN** the system emits a violation for that workspace dependency
+
+#### Scenario: A newly added workspace member is governed without a constitution edit
+
+- **WHEN** a new crate `new-backend` is added to the workspace, the target depends on it, and the unchanged boundary's allowlist does not include `new-backend`
+- **THEN** the system emits a violation naming `new-backend`, because workspace membership is derived from `cargo metadata` rather than a hand-maintained list
+
+#### Scenario: A path dependency outside the workspace is not a workspace dependency
+
+- **WHEN** the target crate declares a `path` dependency on a crate that is not a member of the workspace, under a forbid-all-workspace boundary
+- **THEN** the system reports no violation, because the dependency resolves to a package outside `workspace_members`
+
+### Requirement: Dependency kind selection
+
+A crate boundary SHALL select which dependency table its rule observes — `Normal` (the default), `Dev`, or `Build` — declared in Rust via `.dependency_kind(kind)` on the boundary builder. A boundary that does not select a kind SHALL observe the normal `[dependencies]` table, preserving prior behavior exactly. When `Dev` or `Build` is selected the rule SHALL observe `[dev-dependencies]` or `[build-dependencies]` respectively and SHALL NOT observe the normal table; a boundary observes exactly one table, so governing two tables SHALL be expressed as two boundaries. The selection SHALL apply uniformly to every crate rule (deny-external, forbid, restrict, restrict-workspace), and SHALL appear in the projection when it is not `Normal`.
+
+#### Scenario: A boundary defaults to normal dependencies
+
+- **WHEN** a crate boundary is declared without selecting a dependency kind
+- **THEN** its rule observes the normal `[dependencies]` table, exactly as before this capability existed
+
+#### Scenario: A dev-kind boundary observes dev-dependencies
+
+- **WHEN** a boundary selects `Dev` and the target declares a matching dependency only under `[dev-dependencies]`
+- **THEN** the rule observes that dev-dependency and does not observe the normal table
+
+#### Scenario: The selected kind appears in the projection
+
+- **WHEN** a boundary selects a dependency kind other than `Normal`
+- **THEN** the `list` projection, in text and JSON, shows the selected kind
 

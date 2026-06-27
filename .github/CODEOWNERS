@@ -5,11 +5,25 @@
 # silently weaken a boundary to make CI pass. The review requirement is the
 # reaction: a merge cannot relax the law without a human accepting it.
 #
+# What "the law" actually is here matters: the protected file must be the boundary
+# whose edit turns CI green after drift, not a showcase of it.
+#   - tests/self_governance.rs is Modou's SELF-GOVERNING constitution — the boundaries
+#     Modou enforces on itself (serde_json-only, engine must-not-import runner). It is
+#     the file an agent would have to weaken to make Modou's own CI pass, so it is the
+#     primary thing to protect.
+#   - deny.toml is the supply-chain gate backing the same dependency-light invariant
+#     (license allowlist, advisories); weakening it likewise relaxes the law.
+#   - src/constitution.rs is only the bundled DEMO constitution (target `example-core`)
+#     the published binary and fixtures use — protected so the adoption showcase cannot
+#     rot, but it gates nothing on its own.
+#
 # This file designates the steward for the protected paths. Designation alone only
 # auto-requests review; to make review *required* (block a merge that relaxes the
 # law), the repository admin must enable branch protection on the default branch
 # with "Require review from Code Owners". Until that setting is on, this file
 # documents intent and requests review but does not block.
 
-/crates/modou/src/constitution.rs   @tacticaldoll
-/openspec/specs/                     @tacticaldoll
+/crates/modou/tests/self_governance.rs   @tacticaldoll
+/crates/modou/src/constitution.rs        @tacticaldoll
+/deny.toml                               @tacticaldoll
+/openspec/specs/                         @tacticaldoll

@@ -9,10 +9,14 @@ exclude = [
     "crates/modou/tests/fixtures/violating-multi",
     "crates/modou/tests/fixtures/layered",
     "crates/modou/tests/fixtures/module-layered",
+    "crates/modou/tests/fixtures/module-orphan",
+    "crates/modou/tests/fixtures/module-macro",
+    "crates/modou/tests/fixtures/module-macro-invoke",
+    "crates/modou/tests/fixtures/module-orphan-sub",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 

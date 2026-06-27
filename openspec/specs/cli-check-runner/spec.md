@@ -51,20 +51,6 @@ The runner SHALL exit `0` when no enforce-severity boundary is violated, `1` whe
 - **WHEN** the constitution cannot be evaluated against the workspace (e.g. an unresolvable target or an unreadable workspace)
 - **THEN** the runner prints a constitution error message and exits `2`, never `0`
 
-### Requirement: Missing manifest path is a usage error
-
-When `--manifest-path` is not supplied, the runner SHALL print usage guidance to
-standard error and exit `2`. It MUST NOT exit `0` (no silent pass) and MUST NOT
-exit `1` (a usage mistake is not architectural drift). The runner collapses
-"cannot evaluate" cases — usage errors and constitution/scan errors alike — onto
-exit `2`, so a CI gate reads `0` as ok, `1` as drift, and any other non-zero code
-as "could not judge".
-
-#### Scenario: No manifest path supplied
-
-- **WHEN** the runner is invoked as `modou check` with no `--manifest-path`
-- **THEN** the runner prints usage guidance to standard error and exits `2`
-
 ### Requirement: Baseline flags
 
 The runner SHALL accept two mutually exclusive baseline flags: `--baseline <file>` selects gate mode (suppress baselined violations, fail only on new ones) and `--write-baseline <file>` records the current violations as a baseline. Each SHALL also accept the `=<file>` form. Supplying both SHALL be a usage error that exits 2. In gate mode the process exit code SHALL reflect the gated outcome — 0 when the only violations are baselined or warn, 1 on a new enforce-severity violation. A baseline file that cannot be read or parsed SHALL be treated as a scan error and exit 2.
@@ -139,7 +125,7 @@ The `check` runner contract — argument parsing (`--manifest-path`, `--baseline
 
 #### Scenario: A usage error from the entry point exits 2
 
-- **WHEN** the library runner entry point is invoked without `--manifest-path`, or with both `--baseline` and `--write-baseline`
+- **WHEN** the library runner entry point is invoked with both `--baseline` and `--write-baseline`
 - **THEN** it prints usage guidance and returns exit code `2`, never `0` or `1`
 
 #### Scenario: The bundled binary is a thin caller of the entry point
@@ -175,4 +161,80 @@ The runner SHALL reject any argument it does not recognize — an unknown flag, 
 
 - **WHEN** the runner is invoked as `list --bogus`
 - **THEN** it prints usage guidance and exits `2`
+
+### Requirement: Workspace coverage reporting
+
+The `check` runner SHALL report workspace coverage: how many workspace members (observed from `cargo metadata`) are the target of no boundary. The coverage line SHALL be emitted whenever the constitution was successfully evaluated — a clean or a violations outcome — in the human-readable text output, and under `--format json` as a `coverage` object carrying the workspace member count and the names of uncovered crates. On a constitution error the runner SHALL emit only the error and SHALL NOT emit coverage, because the constitution could not be evaluated and a coverage line would misrepresent crates as uncovered when the law itself is broken. Coverage SHALL be purely informational: it SHALL NOT by itself change the process exit code, because an uncovered crate is the absence of a declared boundary — neither an architectural violation (exit 1) nor a constitution error (exit 2). A workspace member SHALL count as covered if it is the target of at least one boundary, crate or module. The `list` command SHALL NOT report coverage, because it observes no workspace.
+
+#### Scenario: Coverage line reports uncovered crates
+
+- **WHEN** the checked workspace has four members and the constitution targets three of them
+- **THEN** the runner reports that one of four workspace crates has no boundary, and the process exit code is unchanged by that fact
+
+#### Scenario: JSON coverage projection
+
+- **WHEN** `check` runs under `--format json` and the constitution is successfully evaluated
+- **THEN** the JSON document carries a `coverage` object with the workspace member count and an array of the uncovered crate names
+
+#### Scenario: A crate covered only by a module boundary counts as covered
+
+- **WHEN** a workspace crate is the target of a module boundary but of no crate boundary
+- **THEN** the coverage report counts it as covered
+
+#### Scenario: Coverage is omitted on a constitution error
+
+- **WHEN** `check` cannot evaluate the constitution (e.g. an unresolvable target), in text or under `--format json`
+- **THEN** the runner reports the constitution error and exits 2, and the report carries no coverage
+
+### Requirement: The --warn-uncovered flag raises uncovered crates to advisories
+
+The `check` runner SHALL accept a boolean `--warn-uncovered` flag that reports each uncovered workspace crate as a warn-severity advisory. The flag SHALL NOT change the exit-code contract: because warn-severity findings do not fail, a run whose only findings are uncovered-crate advisories SHALL exit 0. The flag SHALL NOT suppress or alter any enforce-severity boundary violation. As a recognized flag it SHALL take no value; supplying it is not a usage error, consistent with how the runner rejects only unrecognized arguments.
+
+#### Scenario: --warn-uncovered reports uncovered crates as advisories without failing
+
+- **WHEN** `check` runs with `--warn-uncovered`, one workspace crate has no boundary, and no enforce-severity boundary is violated
+- **THEN** the runner reports the uncovered crate as a warn advisory and exits 0
+
+#### Scenario: --warn-uncovered does not mask an enforced violation
+
+- **WHEN** `--warn-uncovered` is set and an enforce-severity boundary is violated
+- **THEN** the runner still prints the violation and exits 1
+
+### Requirement: Absent manifest path defaults to the nearest Cargo.toml
+
+When `--manifest-path` is omitted, the `check` runner SHALL default to the nearest `Cargo.toml` discovered by walking up from the current directory (cargo-style) and evaluate the constitution against that workspace, mirroring the outcome in the exit code. An explicit `--manifest-path` SHALL override the default. The runner MUST NOT exit `0` when it could not evaluate the constitution: if no `Cargo.toml` is found from the current directory up to the root, or the resolved workspace cannot be read, the runner SHALL exit `2` (a scan error), never `0`. When no `Cargo.toml` is found, the scan-error message SHALL name the directory the search started from, so the failure is actionable in a monorepo or CI context. The `list` command is unaffected, as it observes no workspace.
+
+#### Scenario: Absent manifest path resolves the nearest Cargo.toml
+
+- **WHEN** the runner is invoked as `modou check` with no `--manifest-path` from within a Cargo workspace
+- **THEN** it evaluates the constitution against the nearest `Cargo.toml` and exits with the code that mirrors the outcome
+
+#### Scenario: An explicit manifest path still overrides the default
+
+- **WHEN** the runner is invoked as `modou check --manifest-path <path>`
+- **THEN** it uses `<path>`, exactly as before, regardless of the current directory
+
+#### Scenario: No Cargo.toml found is a scan error, never a silent pass
+
+- **WHEN** the runner is invoked as `modou check` with no `--manifest-path` and no `Cargo.toml` exists from the current directory up to the root
+- **THEN** the runner reports that it could not find a workspace, naming the directory it searched from, and exits `2`, never `0`
+
+### Requirement: List rejects flags that only apply to check
+
+The `list` command observes no workspace and performs no reaction; it SHALL accept only `--format`. Supplying a flag that applies only to `check` — `--manifest-path`, `--baseline`, `--write-baseline`, or `--warn-uncovered` — to `list` SHALL be a usage error that prints usage guidance and exits `2`, never silently ignored. This complements the unrecognized-argument rule: a flag that is recognized by `check` but inapplicable to `list` SHALL be rejected rather than accepted as a silent no-op.
+
+#### Scenario: A check-only flag supplied to list is a usage error
+
+- **WHEN** the runner is invoked as `list --baseline <file>` (or `--write-baseline <file>`, `--manifest-path <path>`, or `--warn-uncovered`)
+- **THEN** it prints usage guidance and exits `2`, never silently ignoring the flag
+
+#### Scenario: List still accepts the format flag
+
+- **WHEN** the runner is invoked as `list --format json` (or `list --format text`, or `list` with no flag)
+- **THEN** it prints the projection and exits `0`, because `--format` is the one flag `list` honors
+
+#### Scenario: An unknown flag to list is still a usage error
+
+- **WHEN** the runner is invoked as `list --bogus`
+- **THEN** it prints usage guidance and exits `2`, exactly as the unrecognized-argument rule already requires
 

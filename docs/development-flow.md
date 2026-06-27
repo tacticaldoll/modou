@@ -24,6 +24,24 @@ authoritative contributor and agent guide; this file is a short checklist.
    - `openspec archive <change-name>`
    - commit as `chore(openspec): archive <change-name>`
 
+## Branch and Release
+
+The lifecycle commits above live on branches and collapse upward through two
+squashes; `main` stays release-only (the invariant and its rationale are in
+`AGENTS.md`).
+
+1. **Change branch.** Do the work on a branch named after the OpenSpec change
+   (e.g. `add-module-restrict-imports-to`); it carries that change's
+   `propose` / `apply` / `sync` / `archive` commits.
+2. **Squash 1 — change branch → `release/X.Y.Z`.** Open a pull request against the
+   development branch and **Squash and merge** it, so the change lands as a single
+   Conventional Commit. The dev branch reads as one commit per change. Strip any
+   auto-appended `(#N)` from the squash subject; a PR touching a steward-owned path
+   (`.github/CODEOWNERS`) is merged by the steward.
+3. **Squash 2 — `release/X.Y.Z` → `main`.** When the version is cut, open a pull
+   request against `main` and **Squash and merge** it as a single `release: X.Y.Z`
+   commit, then tag it `vX.Y.Z`.
+
 ## Commit Granularity
 
 Apply commits should be larger than individual task checkboxes and smaller than

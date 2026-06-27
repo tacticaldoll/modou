@@ -1,4 +1,4 @@
-//! Modou v0.1 runner — the CI reaction.
+//! Modou runner — the CI reaction.
 //!
 //! A thin caller of the library entry point [`modou::run`], over this repo's own
 //! sample constitution. A real project declares its own constitution in Rust and

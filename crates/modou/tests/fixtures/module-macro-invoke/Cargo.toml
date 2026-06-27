@@ -1,0 +1,11 @@
+# Regression fixture: the only `use crate::ghost::…` is inside a macro INVOCATION body.
+# A macro-generated import (out of scope), so a boundary forbidding `crate::ghost` is clean.
+[package]
+name = "macroinvoke"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,13 @@
+# Regression fixture: a crate-root file does a bare external `use serde::…`, and an
+# orphan `src/serde.rs` exists that no `mod serde;` declares. The scanner must treat the
+# import as external (not the internal `crate::serde::…`), so a module boundary that
+# forbids `crate::serde` stays clean. Its own `[workspace]` keeps it standalone.
+[package]
+name = "orphan"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"

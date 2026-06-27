@@ -1,4 +1,4 @@
-//! Modou v0.1 — Rust-native reactive governance.
+//! Modou — Rust-native reactive governance.
 //!
 //! **Govern by reaction, not instruction.** A [`Constitution`] declared in Rust is
 //! the single source of truth. [`check`] runs its boundaries against a Cargo
@@ -8,11 +8,15 @@
 //!
 //! Two reaction kinds, each with its own observation source:
 //! - [`CrateBoundary`] over `cargo metadata` — deny external dependencies (with an
-//!   optional allowlist), forbid a dependency on named crates, or restrict to a
-//!   closed allowlist.
-//! - [`ModuleBoundary`] over the crate's own source — forbid one module from
-//!   importing another (intra-crate layering Cargo cannot see). Observed from `use`
-//!   declarations only; file-based modules (see PROJECT.md).
+//!   optional allowlist), forbid a dependency on named crates, restrict to a closed
+//!   allowlist, or restrict only the *workspace* dependencies to one (members derived
+//!   from `cargo metadata`); any rule may target the normal, dev, or build dependency
+//!   table via [`DependencyKind`].
+//! - [`ModuleBoundary`] over the crate's own source — forbid one module from importing
+//!   another, restrict its imports to a closed allowlist, or forbid it from being
+//!   imported by a named module (the inbound direction). The intra-crate layering Cargo
+//!   cannot see, observed from `use` declarations only; file-based modules (see
+//!   PROJECT.md).
 //!
 //! Each boundary carries a [`Severity`] (`warn` before `enforce`), and violations
 //! can be gated against a baseline. No macros, no TOML/Markdown for the
@@ -30,8 +34,9 @@ mod runner;
 
 pub use engine::{
     Boundary, BoundaryKind, Constitution, CrateBoundary, CrateBoundaryBuilder, CrateBoundaryDraft,
-    CrateTarget, DenyExternalDraft, ModuleBoundary, ModuleBoundaryBuilder, ModuleBoundaryDraft,
-    ModuleRule, ModuleTargetDraft, Outcome, Report, Rule, Severity, Violation, ViolationId, check,
+    CrateTarget, DenyExternalDraft, DependencyKind, ModuleBoundary, ModuleBoundaryBuilder,
+    ModuleBoundaryDraft, ModuleRule, ModuleTargetDraft, Outcome, Report, Rule, Severity, Violation,
+    ViolationId, check,
 };
 pub use runner::run;
 
@@ -40,7 +45,7 @@ pub use runner::run;
 /// consumers go through `check` / `run`.
 pub mod prelude {
     pub use super::{
-        Boundary, BoundaryKind, Constitution, CrateBoundary, ModuleBoundary, Outcome, Report, Rule,
-        Severity, Violation, ViolationId, check, run,
+        Boundary, BoundaryKind, Constitution, CrateBoundary, DependencyKind, ModuleBoundary,
+        Outcome, Report, Rule, Severity, Violation, ViolationId, check, run,
     };
 }

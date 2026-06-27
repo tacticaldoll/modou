@@ -1,0 +1,12 @@
+# Regression fixture: src/kernel/orphan.rs is an undeclared submodule file (kernel.rs has
+# no `mod orphan;`). Rust never compiles it, so its forbidden `use` must not be observed:
+# a boundary on `crate::kernel` forbidding `crate::ghost` stays clean.
+[package]
+name = "orphansub"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"

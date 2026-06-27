@@ -25,8 +25,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::engine::{
-    Baseline, Constitution, Outcome, Report, Severity, ViolationId, apply_baseline, check,
-    constitution_json, constitution_text, report_json,
+    Baseline, Constitution, Coverage, Outcome, Report, Severity, ViolationId, apply_baseline,
+    check_and_cover, constitution_json, constitution_text, report_json,
 };
 
 /// Which runner command was requested. `check` reacts against a workspace; `list`
@@ -59,6 +59,7 @@ where
     let mut baseline_path: Option<String> = None;
     let mut write_baseline_path: Option<String> = None;
     let mut format: Option<String> = None;
+    let mut warn_uncovered = false;
     let mut args = args.into_iter().map(Into::into).skip(1).peekable();
 
     // The command is the first positional token; an absent or unrecognized leading
@@ -93,6 +94,7 @@ where
             "--baseline" => baseline_path = Some(value!("--baseline")),
             "--write-baseline" => write_baseline_path = Some(value!("--write-baseline")),
             "--format" => format = Some(value!("--format")),
+            "--warn-uncovered" => warn_uncovered = true,
             other => {
                 if let Some(path) = other.strip_prefix("--manifest-path=") {
                     manifest_path = Some(path.to_string());
@@ -124,8 +126,17 @@ where
     };
 
     // `list` is a projection, not a reaction: it observes nothing (no
-    // `--manifest-path`), cannot fail a boundary, and always exits 0.
+    // `--manifest-path`), cannot fail a boundary, and always exits 0. It accepts
+    // only `--format`; a check-only flag supplied to `list` is a usage error, not a
+    // silent no-op (PROJECT.md: never silently ignore a flag).
     if command == Command::List {
+        if manifest_path.is_some()
+            || baseline_path.is_some()
+            || write_baseline_path.is_some()
+            || warn_uncovered
+        {
+            return usage("list takes only --format; other flags are check-only");
+        }
         if json {
             println!("{}", constitution_json(constitution));
         } else {
@@ -135,27 +146,55 @@ where
     }
 
     // From here on the command is `check`: it requires a workspace to observe.
+    // An absent `--manifest-path` defaults to the nearest `Cargo.toml`, cargo-style.
+    // Defaulting the target location is not a silent pass: if none is found the run
+    // exits 2 (a scan error), never 0.
     let manifest_path = match manifest_path {
         Some(path) => PathBuf::from(path),
-        None => return usage("missing --manifest-path"),
+        None => match nearest_manifest() {
+            Some(path) => path,
+            None => {
+                let from = std::env::current_dir()
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or_else(|_| "the current directory".to_string());
+                eprintln!(
+                    "Modou: no Cargo.toml found from {from} up to the root; \
+                     pass --manifest-path <path>"
+                );
+                return 2;
+            }
+        },
     };
     if baseline_path.is_some() && write_baseline_path.is_some() {
         return usage("--baseline and --write-baseline are mutually exclusive");
     }
 
-    let mut outcome = check(constitution, &manifest_path);
+    // One `cargo metadata` read feeds both the reaction outcome and coverage.
+    let (mut outcome, observed_coverage) = check_and_cover(constitution, &manifest_path);
 
     if let Some(path) = write_baseline_path {
         return write_baseline(&outcome, &path);
     }
+
+    // Coverage is an observation, not a reaction: surfaced only when the constitution
+    // was successfully evaluated, omitted on a constitution error (where the error is
+    // the story), and never affecting the exit code.
+    let coverage = match outcome {
+        Outcome::ConstitutionError(_) => None,
+        _ => observed_coverage,
+    };
+
     if let Some(path) = baseline_path {
-        return gate(&mut outcome, &path, json);
+        return gate(&mut outcome, &path, json, coverage.as_ref(), warn_uncovered);
     }
 
     if json {
-        println!("{}", report_json(&outcome, &[]));
+        println!("{}", report_json(&outcome, &[], coverage.as_ref()));
     } else {
         report(&outcome);
+        if let Some(coverage) = &coverage {
+            report_coverage(coverage, warn_uncovered);
+        }
     }
     outcome.exit_code()
 }
@@ -166,11 +205,27 @@ fn usage(message: &str) -> u8 {
     eprintln!(
         "usage:\n  \
          modou check --manifest-path <path/to/Cargo.toml> \
-         [--baseline <file> | --write-baseline <file>] [--format text|json]\n  \
+         [--baseline <file> | --write-baseline <file>] [--format text|json] \
+         [--warn-uncovered]\n  \
          modou list [--format text|json]"
     );
     eprintln!("error: {message}");
     2
+}
+
+/// Walk up from the current directory to the nearest `Cargo.toml`, cargo-style, so
+/// `check` can default its target like `cargo` does when `--manifest-path` is omitted.
+fn nearest_manifest() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 /// Record the current violations as a baseline. Recording is not judging, so this
@@ -191,7 +246,7 @@ fn write_baseline(outcome: &Outcome, path: &str) -> u8 {
     let baseline = Baseline::of(report);
     match std::fs::write(path, baseline.to_json()) {
         Ok(()) => {
-            println!(
+            eprintln!(
                 "Modou: wrote {} violation(s) to baseline {path}",
                 report.violations.len()
             );
@@ -206,7 +261,25 @@ fn write_baseline(outcome: &Outcome, path: &str) -> u8 {
 
 /// Gate against a baseline: suppress recorded violations, fail only on new ones,
 /// and report stale baseline entries. An unreadable baseline is a scan error.
-fn gate(outcome: &mut Outcome, path: &str, json: bool) -> u8 {
+fn gate(
+    outcome: &mut Outcome,
+    path: &str,
+    json: bool,
+    coverage: Option<&Coverage>,
+    warn_uncovered: bool,
+) -> u8 {
+    // A constitution error is the whole story: report it before reading the baseline, so
+    // it is never masked by a missing or unreadable baseline file (both exit 2, but the
+    // constitution error is the actionable one).
+    if let Outcome::ConstitutionError(message) = outcome {
+        if json {
+            println!("{}", report_json(outcome, &[], None));
+        } else {
+            eprintln!("Modou constitution error: {message}");
+        }
+        return 2;
+    }
+
     let baseline = match std::fs::read_to_string(path) {
         Ok(text) => match Baseline::from_json(&text) {
             Ok(baseline) => baseline,
@@ -221,14 +294,6 @@ fn gate(outcome: &mut Outcome, path: &str, json: bool) -> u8 {
         }
     };
 
-    if let Outcome::ConstitutionError(message) = outcome {
-        if json {
-            println!("{}", report_json(outcome, &[]));
-        } else {
-            eprintln!("Modou constitution error: {message}");
-        }
-        return 2;
-    }
     if let Outcome::Violations(report) = outcome {
         apply_baseline(report, &baseline);
     }
@@ -242,7 +307,7 @@ fn gate(outcome: &mut Outcome, path: &str, json: bool) -> u8 {
     };
     let stale: Vec<ViolationId> = baseline.stale(report).into_iter().cloned().collect();
     if json {
-        println!("{}", report_json(outcome, &stale));
+        println!("{}", report_json(outcome, &stale, coverage));
     } else {
         report_violations(report);
         for entry in &stale {
@@ -251,13 +316,22 @@ fn gate(outcome: &mut Outcome, path: &str, json: bool) -> u8 {
                 entry.target, entry.rule, entry.finding
             );
         }
+        if let Some(coverage) = coverage {
+            report_coverage(coverage, warn_uncovered);
+        }
     }
     outcome.exit_code()
 }
 
+/// The human-readable `check` report goes to **stderr** as a single stream — clean
+/// line, violation/advisory blocks, the baseline summary, coverage, and stale entries
+/// alike — so a CI log shows them in a deterministic order rather than interleaving a
+/// stderr report with a stdout coverage line. Stdout is reserved for machine output:
+/// the `--format json` document and the `list` projection. (This mirrors how `cargo`
+/// and `clippy` keep diagnostics on stderr and leave stdout for consumable data.)
 fn report(outcome: &Outcome) {
     match outcome {
-        Outcome::Clean => println!("Modou: clean — no boundary violated"),
+        Outcome::Clean => eprintln!("Modou: clean — no boundary violated"),
         Outcome::Violations(report) => report_violations(report),
         Outcome::ConstitutionError(message) => {
             eprintln!("Modou constitution error: {message}");
@@ -269,7 +343,7 @@ fn report(outcome: &Outcome) {
 /// and summarize how many were suppressed by a baseline.
 fn report_violations(report: &Report) {
     if report.violations.is_empty() {
-        println!("Modou: clean — no boundary violated");
+        eprintln!("Modou: clean — no boundary violated");
         return;
     }
     let mut baselined = 0usize;
@@ -292,7 +366,35 @@ fn report_violations(report: &Report) {
         eprintln!("Reaction:\n  {reaction}");
     }
     if baselined > 0 {
-        println!("Modou: {baselined} pre-existing violation(s) suppressed by baseline");
+        eprintln!("Modou: {baselined} pre-existing violation(s) suppressed by baseline");
+    }
+}
+
+/// Print the workspace coverage summary, and — under `--warn-uncovered` — each
+/// uncovered crate as a warn-severity advisory. Coverage is an observation: it is
+/// reported but never changes the exit code.
+fn report_coverage(coverage: &Coverage, warn_uncovered: bool) {
+    let uncovered = coverage.uncovered.len();
+    if uncovered == 0 {
+        eprintln!(
+            "Modou: coverage — all {} workspace crate(s) have a boundary",
+            coverage.total
+        );
+        return;
+    }
+    eprintln!(
+        "Modou: coverage — {uncovered} of {} workspace crate(s) have no boundary",
+        coverage.total
+    );
+    if warn_uncovered {
+        for crate_name in &coverage.uncovered {
+            eprintln!();
+            eprintln!("Modou advisory");
+            eprintln!();
+            eprintln!("Uncovered crate:\n  {crate_name}");
+            eprintln!("Reason:\n  no boundary governs this workspace crate");
+            eprintln!("Reaction:\n  warning only — CI not failed.");
+        }
     }
 }
 
@@ -333,10 +435,9 @@ mod tests {
     // need no fixture: each asserts an exit code decided during argument parsing,
     // before any workspace is observed.
 
-    #[test]
-    fn missing_manifest_path_exits_2() {
-        assert_eq!(run_args(&["modou", "check"]), 2);
-    }
+    // Note: `check` with no --manifest-path now defaults to the nearest Cargo.toml
+    // (cargo-style), so its behavior depends on the working directory and is covered
+    // end-to-end in tests/cli.rs (with a controlled cwd), not here.
 
     #[test]
     fn both_baseline_flags_exit_2() {
@@ -453,5 +554,23 @@ mod tests {
     #[test]
     fn list_unknown_flag_exits_2() {
         assert_eq!(run_args(&["modou", "list", "--bogus"]), 2);
+    }
+
+    #[test]
+    fn list_rejects_check_only_flags() {
+        // `list` observes no workspace, so a check-only flag is a usage error (exit 2),
+        // never a silent no-op. Each is rejected during parsing/dispatch, no fixture.
+        for args in [
+            &["modou", "list", "--manifest-path", "Cargo.toml"][..],
+            &["modou", "list", "--baseline", "b.json"][..],
+            &["modou", "list", "--write-baseline", "b.json"][..],
+            &["modou", "list", "--warn-uncovered"][..],
+        ] {
+            assert_eq!(
+                run_args(args),
+                2,
+                "a check-only flag supplied to list must exit 2: {args:?}",
+            );
+        }
     }
 }
